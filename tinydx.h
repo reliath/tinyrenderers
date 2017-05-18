@@ -479,9 +479,9 @@ typedef struct tr_buffer {
     uint64_t                            first_element;
     uint64_t                            element_count;
     uint64_t                            struct_stride;
-    uint64_t                            counter_offset;
     void*                               cpu_mapped_address;
     ID3D12Resource*                     dx_resource;
+    ID3D12Resource*                     dx_resource_counter;
     D3D12_CONSTANT_BUFFER_VIEW_DESC     dx_cbv_view_desc;
     D3D12_SHADER_RESOURCE_VIEW_DESC     dx_srv_view_desc;
     D3D12_UNORDERED_ACCESS_VIEW_DESC    dx_uav_view_desc;
@@ -2038,10 +2038,14 @@ uint32_t tr_vertex_layout_stride(const tr_vertex_layout* p_vertex_layout)
 // -------------------------------------------------------------------------------------------------
 // Utility functions
 // -------------------------------------------------------------------------------------------------
+// This function is used when storing the counter with the buffer.
+// tinyrenderers uses a seperate resource for storing the counter.
+// This function is just here in case the need arises to add the 
+// ability to store the counter with the buffer at some point.
 uint64_t tr_util_calc_storage_counter_offset(uint64_t buffer_size)
 {
-		uint64_t alignment = D3D12_UAV_COUNTER_PLACEMENT_ALIGNMENT;
-		uint64_t result = (buffer_size + (alignment - 1)) & ~(alignment - 1);
+    uint64_t alignment = D3D12_UAV_COUNTER_PLACEMENT_ALIGNMENT;
+    uint64_t result = (buffer_size + (alignment - 1)) & ~(alignment - 1);
     return result;
 }
 

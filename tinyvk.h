@@ -464,6 +464,7 @@ typedef struct tr_buffer {
     tr_renderer*                        renderer;
     tr_buffer_usage                     usage;
     uint64_t                            size;
+    uint64_t                            counter_size;
     bool                                host_visible;
     tr_buffer_feature_flags             features; 
     tr_index_type                       index_type;
@@ -472,12 +473,14 @@ typedef struct tr_buffer {
     uint64_t                            first_element;
     uint64_t                            element_count;
     uint64_t                            struct_stride;
-    uint64_t                            counter_offset;
     void*                               cpu_mapped_address;
     VkBuffer                            vk_buffer;
     VkDeviceMemory                      vk_memory;
+    VkBuffer                            vk_counter_buffer;
+    VkDeviceMemory                      vk_counter_memory;
     // Used for uniform and storage buffers
     VkDescriptorBufferInfo              vk_buffer_info;
+    VkDescriptorBufferInfo              vk_counter_buffer_info;
     // Used for uniform texel and storage texel buffers
     VkBufferView                        vk_buffer_view;
 } tr_buffer;
@@ -617,7 +620,7 @@ tr_api_export void tr_create_index_buffer(tr_renderer*p_renderer, uint64_t size,
 tr_api_export void tr_create_uniform_buffer(tr_renderer* p_renderer, uint64_t size, bool host_visible, tr_buffer** pp_buffer);
 tr_api_export void tr_create_vertex_buffer(tr_renderer* p_renderer, uint64_t size, bool host_visible, uint32_t vertex_stride, tr_buffer** pp_buffer);
 tr_api_export void tr_create_uniform_texel_buffer(tr_renderer* p_renderer, uint64_t size, bool host_visible, tr_format format, uint64_t first_element, uint64_t element_count, uint64_t struct_stride, tr_buffer** pp_buffer);
-tr_api_export void tr_create_storage_buffer(tr_renderer* p_renderer, uint64_t size, uint64_t first_element, uint64_t element_count, uint64_t struct_stride, uint64_t counter_offset, tr_buffer_feature_flags features, tr_buffer** pp_buffer);
+tr_api_export void tr_create_storage_buffer(tr_renderer* p_renderer, uint64_t size, uint64_t first_element, uint64_t element_count, uint64_t struct_stride, tr_buffer_feature_flags features, tr_buffer** pp_buffer);
 tr_api_export void tr_destroy_buffer(tr_renderer* p_renderer, tr_buffer* p_buffer);
 
 tr_api_export void tr_create_texture(tr_renderer* p_renderer, tr_texture_type type, uint32_t width, uint32_t height, uint32_t depth, tr_sample_count sample_count, tr_format format, uint32_t mip_levels, const tr_clear_value* p_clear_value, bool host_visible, tr_texture_usage_flags usage, tr_texture** pp_texture);
@@ -674,6 +677,7 @@ tr_api_export bool      tr_vertex_layout_support_format(tr_format format);
 tr_api_export uint32_t  tr_vertex_layout_stride(const tr_vertex_layout* p_vertex_layout);
 
 // Utility functions
+tr_api_export uint64_t           tr_util_calc_storage_counter_offset(uint64_t buffer_size);
 tr_api_export uint32_t           tr_util_calc_mip_levels(uint32_t width, uint32_t height);
 tr_api_export VkFormat           tr_util_to_vk_format(tr_format format);
 tr_api_export tr_format          tr_util_from_vk_format(VkFormat fomat);
@@ -1290,6 +1294,16 @@ void tr_create_descriptor_set(tr_renderer* p_renderer, uint32_t descriptor_count
     p_descriptor_set->descriptor_count = descriptor_count;
     memcpy(p_descriptor_set->descriptors, p_descriptors, descriptor_count * sizeof(*(p_descriptor_set->descriptors)));
 
+    for (uint32_t i = 0; i < p_descriptor_set->descriptor_count; ++i) {
+      if (p_descriptor_set->descriptors[i].type == tr_descriptor_type_storage_buffer) {
+        // For now, since we have to attach a counter buffer to storage buffers, limit
+        // the incoming count to 1.
+        assert(p_descriptor_set->descriptors[i].count == 1);
+        // Adjust the count to two for the counter buffer.
+        p_descriptor_set->descriptors[i].count = 2;
+      }
+    }
+
     tr_internal_vk_create_descriptor_set(p_renderer, p_descriptor_set);
 
     *pp_descriptor_set = p_descriptor_set;
@@ -1432,14 +1446,13 @@ void tr_create_uniform_texel_buffer(tr_renderer* p_renderer, uint64_t size, bool
     p_buffer->first_element   = first_element;
     p_buffer->element_count   = element_count;
     p_buffer->struct_stride   = struct_stride;
-    p_buffer->counter_offset  = 0;
     
     tr_internal_vk_create_buffer(p_renderer, p_buffer);
 
     *pp_buffer = p_buffer;
 }
 
-void tr_create_storage_buffer(tr_renderer* p_renderer, uint64_t size, uint64_t first_element, uint64_t element_count, uint64_t struct_stride, uint64_t counter_offset, tr_buffer_feature_flags features, tr_buffer** pp_buffer)
+void tr_create_storage_buffer(tr_renderer* p_renderer, uint64_t size, uint64_t first_element, uint64_t element_count, uint64_t struct_stride, tr_buffer_feature_flags features, tr_buffer** pp_buffer)
 {
     TINY_RENDERER_RENDERER_PTR_CHECK(p_renderer);
     assert(size > 0 );
@@ -1456,7 +1469,6 @@ void tr_create_storage_buffer(tr_renderer* p_renderer, uint64_t size, uint64_t f
     p_buffer->first_element   = first_element;
     p_buffer->element_count   = element_count;
     p_buffer->struct_stride   = struct_stride;
-    p_buffer->counter_offset  = counter_offset;
     
     tr_internal_vk_create_buffer(p_renderer, p_buffer);
 
@@ -2110,6 +2122,12 @@ uint32_t tr_vertex_layout_stride(const tr_vertex_layout* p_vertex_layout)
 // -------------------------------------------------------------------------------------------------
 // Utility functions
 // -------------------------------------------------------------------------------------------------
+uint64_t tr_util_calc_storage_counter_offset(uint64_t buffer_size)
+{
+    uint64_t result = 0;
+    return result;
+}
+
 uint32_t tr_util_calc_mip_levels(uint32_t width, uint32_t height)
 {
     if (width == 0 || height == 0)
@@ -2379,8 +2397,9 @@ void tr_util_set_storage_buffer_count(tr_queue* p_queue, uint64_t count_offset, 
     assert(NULL != p_buffer->vk_buffer);
 
     tr_buffer* buffer = NULL;
-    tr_create_buffer(p_buffer->renderer, tr_buffer_usage_transfer_src, 256, true, &buffer);
+    tr_create_buffer(p_buffer->renderer, tr_buffer_usage_transfer_src, p_buffer->counter_size, true, &buffer);
     uint32_t* mapped_ptr = (uint32_t*)buffer->cpu_mapped_address;
+    memset(mapped_ptr, 0, buffer->size);
     *(mapped_ptr) = count;
     
     tr_cmd_pool* p_cmd_pool = NULL;
@@ -2395,8 +2414,8 @@ void tr_util_set_storage_buffer_count(tr_queue* p_queue, uint64_t count_offset, 
     TINY_RENDERER_DECLARE_ZERO(VkBufferCopy, region);
     region.srcOffset = 0;
     region.dstOffset = 0;
-    region.size      = (VkDeviceSize)4;
-    vkCmdCopyBuffer(p_cmd->vk_cmd_buf, buffer->vk_buffer, p_buffer->vk_buffer, 1, &region);
+    region.size      = (VkDeviceSize)(p_buffer->counter_size);
+    vkCmdCopyBuffer(p_cmd->vk_cmd_buf, buffer->vk_buffer, p_buffer->vk_counter_buffer, 1, &region);
     tr_end_cmd(p_cmd);
 
     tr_queue_submit(p_queue, 1, &p_cmd, 0, NULL, 0, NULL);
@@ -3695,25 +3714,66 @@ void tr_internal_vk_create_buffer(tr_renderer* p_renderer, tr_buffer* p_buffer)
         assert(VK_SUCCESS == vk_res);
     }
 
+    p_buffer->size = alloc_info.allocationSize;
+
+    if (p_buffer->usage == tr_buffer_usage_storage) {
+        // Create counter buffer
+        create_info.size = 256;
+        vk_res = vkCreateBuffer(p_renderer->vk_device, &create_info, NULL, &(p_buffer->vk_counter_buffer));
+        assert(VK_SUCCESS == vk_res);
+
+        memset(&mem_reqs, 0, sizeof(mem_reqs));
+        vkGetBufferMemoryRequirements(p_renderer->vk_device, p_buffer->vk_counter_buffer, &mem_reqs);
+
+        //mem_flags = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT;
+        //if (p_buffer->host_visible) {
+        //    mem_flags = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
+        //}
+
+        memory_type_index = UINT32_MAX;
+        found_memmory = tr_util_vk_get_memory_type(&p_renderer->vk_memory_properties, mem_reqs.memoryTypeBits, mem_flags, &memory_type_index);
+        assert(found_memmory);
+
+        memset(&alloc_info, 0, sizeof(alloc_info));
+        alloc_info.sType           = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+        alloc_info.pNext           = NULL;
+        alloc_info.allocationSize  = mem_reqs.size;
+        alloc_info.memoryTypeIndex = memory_type_index;
+        vk_res = vkAllocateMemory(p_renderer->vk_device, &alloc_info, NULL, &(p_buffer->vk_counter_memory));
+        assert(VK_SUCCESS == vk_res);
+
+        vk_res = vkBindBufferMemory(p_renderer->vk_device, p_buffer->vk_counter_buffer, p_buffer->vk_counter_memory, 0);
+        assert(VK_SUCCESS == vk_res);
+
+        //if (p_buffer->host_visible) {
+        //    vk_res = vkMapMemory(p_renderer->vk_device, p_buffer->vk_counter_memory, 0, VK_WHOLE_SIZE, 0, &(p_buffer->cpu_mapped_address));
+        //    assert(VK_SUCCESS == vk_res);
+        //}
+
+        p_buffer->counter_size = alloc_info.allocationSize;
+    }
+
     switch (p_buffer->usage) {
         case tr_buffer_usage_uniform_texel:
         case tr_buffer_usage_storage_texel: {
-          TINY_RENDERER_DECLARE_ZERO(VkBufferViewCreateInfo, buffer_view_create_info);
-          buffer_view_create_info.sType   = VK_STRUCTURE_TYPE_BUFFER_VIEW_CREATE_INFO;
-          buffer_view_create_info.pNext   = NULL;
-          buffer_view_create_info.flags   = 0;
-          buffer_view_create_info.buffer  = p_buffer->vk_buffer;
-          buffer_view_create_info.format  = tr_util_to_vk_format(p_buffer->format);
-          buffer_view_create_info.offset  = p_buffer->counter_offset;
-          buffer_view_create_info.range   = VK_WHOLE_SIZE;
         }
         break;
 
-        case tr_buffer_usage_uniform:
+        case tr_buffer_usage_uniform: {
+            p_buffer->vk_buffer_info.buffer = p_buffer->vk_buffer;
+            p_buffer->vk_buffer_info.offset = 0;
+            p_buffer->vk_buffer_info.range  = VK_WHOLE_SIZE;
+        }
+        break; 
+
         case tr_buffer_usage_storage: {
             p_buffer->vk_buffer_info.buffer = p_buffer->vk_buffer;
             p_buffer->vk_buffer_info.offset = 0;
             p_buffer->vk_buffer_info.range  = VK_WHOLE_SIZE;
+
+            p_buffer->vk_counter_buffer_info.buffer = p_buffer->vk_counter_buffer;
+            p_buffer->vk_counter_buffer_info.offset = 0;
+            p_buffer->vk_counter_buffer_info.range  = VK_WHOLE_SIZE;
         }
         break;
     }
@@ -4685,12 +4745,26 @@ void tr_internal_vk_update_descriptor_set(tr_renderer* p_renderer, tr_descriptor
 
                 writes[write_index].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
                 writes[write_index].pBufferInfo = &(buffer_views[buffer_view_index]);
-                for (uint32_t i = 0; i < descriptor->count; ++i) {
-                    memcpy(&(buffer_views[buffer_view_index]), 
-                           &(descriptor->buffers[i]->vk_buffer_info),
-                           sizeof(descriptor->buffers[i]->vk_buffer_info));
-                    ++buffer_view_index;
-                }
+                // Storage buffers should have a count of two, the buffer and the counter.
+                assert(descriptor->count == 2);
+
+                memcpy(&(buffer_views[buffer_view_index]), 
+                        &(descriptor->buffers[0]->vk_buffer_info),
+                        sizeof(descriptor->buffers[0]->vk_buffer_info));
+
+                memcpy(&(buffer_views[buffer_view_index + 1]), 
+                        &(descriptor->buffers[0]->vk_counter_buffer_info),
+                        sizeof(descriptor->buffers[0]->vk_counter_buffer_info));
+
+
+                buffer_view_index += 2;
+
+                //for (uint32_t i = 0; i < descriptor->count; ++i) {
+                //    memcpy(&(buffer_views[buffer_view_index]), 
+                //           &(descriptor->buffers[i]->vk_buffer_info),
+                //           sizeof(descriptor->buffers[i]->vk_buffer_info));
+                //    ++buffer_view_index;
+                //}
             }
             break;
 
@@ -4960,117 +5034,130 @@ void tr_internal_vk_cmd_buffer_transition(tr_cmd* p_cmd, tr_buffer* p_buffer, tr
     VkPipelineStageFlags src_stage_mask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
     VkPipelineStageFlags dst_stage_mask = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
     VkDependencyFlags dependency_flags = 0;
-    TINY_RENDERER_DECLARE_ZERO(VkBufferMemoryBarrier , barrier);
-    barrier.sType               = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
-    barrier.pNext               = NULL;
-    barrier.srcQueueFamilyIndex = 0;
-    barrier.dstQueueFamilyIndex = 0;
-    barrier.buffer              = p_buffer->vk_buffer;
-    barrier.offset              = 0;
-    barrier.size                = VK_WHOLE_SIZE;
+    TINY_RENDERER_DECLARE_ZERO(VkBufferMemoryBarrier , barriers[2]);
+    barriers[0].sType               = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
+    barriers[0].pNext               = NULL;
+    barriers[0].srcQueueFamilyIndex = 0;
+    barriers[0].dstQueueFamilyIndex = 0;
+    barriers[0].buffer              = p_buffer->vk_buffer;
+    barriers[0].offset              = 0;
+    barriers[0].size                = VK_WHOLE_SIZE;
 
-    switch (old_usage) {
-        case tr_buffer_usage_transfer_src: {
-            barrier.srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
-        }
-        break;
-
-        case tr_buffer_usage_transfer_dst: {
-            barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-        }
-        break;
-
-        case tr_buffer_usage_uniform_texel: {
-            barrier.srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
-        }
-        break;
-
-        case tr_buffer_usage_storage_texel: {
-            barrier.srcAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
-        }
-        break;
-
-        case tr_buffer_usage_uniform: {
-            barrier.srcAccessMask = VK_ACCESS_UNIFORM_READ_BIT;
-        }
-        break;
-
-        case tr_buffer_usage_storage: {
-            barrier.srcAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
-        }
-        break;
-
-        case tr_buffer_usage_index: {
-            barrier.srcAccessMask = VK_ACCESS_INDEX_READ_BIT;
-        }
-        break;
-
-        case tr_buffer_usage_vertex: {
-            barrier.srcAccessMask = VK_ACCESS_VERTEX_ATTRIBUTE_READ_BIT;
-        }
-        break;
-
-        case tr_buffer_usage_indirect: {
-            barrier.srcAccessMask = VK_ACCESS_INDIRECT_COMMAND_READ_BIT;
-        }
-        break;
+    if (p_buffer->vk_counter_buffer != VK_NULL_HANDLE) {
+      barriers[1].sType               = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
+      barriers[1].pNext               = NULL;
+      barriers[1].srcQueueFamilyIndex = 0;
+      barriers[1].dstQueueFamilyIndex = 0;
+      barriers[1].buffer              = p_buffer->vk_counter_buffer;
+      barriers[1].offset              = 0;
+      barriers[1].size                = VK_WHOLE_SIZE;
     }
 
-    switch (new_usage) {
-        case tr_buffer_usage_transfer_src: {
-            barrier.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
-        }
-        break;
+    for (uint32_t i = 0; i < 2; ++i) {
+      switch (old_usage) {
+          case tr_buffer_usage_transfer_src: {
+              barriers[i].srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+          }
+          break;
 
-        case tr_buffer_usage_transfer_dst: {
-            barrier.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-        }
-        break;
+          case tr_buffer_usage_transfer_dst: {
+              barriers[i].srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+          }
+          break;
 
-        case tr_buffer_usage_uniform_texel: {
-            barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
-        }
-        break;
+          case tr_buffer_usage_uniform_texel: {
+              barriers[i].srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
+          }
+          break;
 
-        case tr_buffer_usage_storage_texel: {
-            barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
-        }
-        break;
+          case tr_buffer_usage_storage_texel: {
+              barriers[i].srcAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
+          }
+          break;
 
-        case tr_buffer_usage_uniform: {
-            barrier.dstAccessMask = VK_ACCESS_UNIFORM_READ_BIT;
-        }
-        break;
+          case tr_buffer_usage_uniform: {
+              barriers[i].srcAccessMask = VK_ACCESS_UNIFORM_READ_BIT;
+          }
+          break;
 
-        case tr_buffer_usage_storage: {
-            barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
-        }
-        break;
+          case tr_buffer_usage_storage: {
+              barriers[i].srcAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
+          }
+          break;
 
-        case tr_buffer_usage_index: {
-            barrier.dstAccessMask = VK_ACCESS_INDEX_READ_BIT;
-        }
-        break;
+          case tr_buffer_usage_index: {
+              barriers[i].srcAccessMask = VK_ACCESS_INDEX_READ_BIT;
+          }
+          break;
 
-        case tr_buffer_usage_vertex: {
-            barrier.dstAccessMask = VK_ACCESS_VERTEX_ATTRIBUTE_READ_BIT;
-        }
-        break;
+          case tr_buffer_usage_vertex: {
+              barriers[i].srcAccessMask = VK_ACCESS_VERTEX_ATTRIBUTE_READ_BIT;
+          }
+          break;
 
-        case tr_buffer_usage_indirect: {
-            barrier.dstAccessMask = VK_ACCESS_INDIRECT_COMMAND_READ_BIT;
-        }
-        break;
+          case tr_buffer_usage_indirect: {
+              barriers[i].srcAccessMask = VK_ACCESS_INDIRECT_COMMAND_READ_BIT;
+          }
+          break;
+      }
+
+      switch (new_usage) {
+          case tr_buffer_usage_transfer_src: {
+              barriers[i].dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+          }
+          break;
+
+          case tr_buffer_usage_transfer_dst: {
+              barriers[i].dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+          }
+          break;
+
+          case tr_buffer_usage_uniform_texel: {
+              barriers[i].dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+          }
+          break;
+
+          case tr_buffer_usage_storage_texel: {
+              barriers[i].dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
+          }
+          break;
+
+          case tr_buffer_usage_uniform: {
+              barriers[i].dstAccessMask = VK_ACCESS_UNIFORM_READ_BIT;
+          }
+          break;
+
+          case tr_buffer_usage_storage: {
+              barriers[i].dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
+          }
+          break;
+
+          case tr_buffer_usage_index: {
+              barriers[i].dstAccessMask = VK_ACCESS_INDEX_READ_BIT;
+          }
+          break;
+
+          case tr_buffer_usage_vertex: {
+              barriers[i].dstAccessMask = VK_ACCESS_VERTEX_ATTRIBUTE_READ_BIT;
+          }
+          break;
+
+          case tr_buffer_usage_indirect: {
+              barriers[i].dstAccessMask = VK_ACCESS_INDIRECT_COMMAND_READ_BIT;
+          }
+          break;
+      }
     }
 
+    uint32_t barrier_count = (p_buffer->vk_counter_buffer != VK_NULL_HANDLE) ? 2 : 1;
     vkCmdPipelineBarrier(p_cmd->vk_cmd_buf,
                          src_stage_mask,
                          dst_stage_mask,
                          dependency_flags,
                          0,
                          NULL,
-                         1,
-                         &barrier,
+                         barrier_count,
+                         barriers,
                          0,
                          NULL);
 }
