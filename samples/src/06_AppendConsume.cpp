@@ -37,7 +37,9 @@ tr_cmd**            m_cmds = nullptr;
 tr_shader_program*  m_compute_shader = nullptr;
 tr_shader_program*  m_texture_shader = nullptr;
 tr_buffer*          m_compute_src_buffer = nullptr;
+tr_buffer*          m_compute_src_buffer_count = nullptr;
 tr_buffer*          m_compute_dst_buffer = nullptr;
+tr_buffer*          m_compute_dst_buffer_count = nullptr;
 tr_buffer*          m_rect_index_buffer = nullptr;
 tr_buffer*          m_rect_vertex_buffer = nullptr;
 tr_pipeline*        m_pipeline = nullptr;
@@ -173,15 +175,13 @@ void init_tiny_renderer(GLFWwindow* window)
     tr_create_cmd_n(m_cmd_pool, false, kImageCount, &m_cmds);
     
 #if defined(TINY_RENDERER_VK)
-    auto comp = load_file(kAssetDir + "structured_buffer.spv");
+    auto comp = load_file(kAssetDir + "append_consume.spv");
     tr_create_shader_program_compute(m_renderer, 
                                      comp.size(), comp.data(), "main", &m_compute_shader);
 
     auto vert = load_file(kAssetDir + "texture_vert.spv");
     auto frag = load_file(kAssetDir + "texture_frag.spv");
     tr_create_shader_program(m_renderer, 
-                             //vert.size(), (uint32_t*)(vert.data()), "main", 
-                             //frag.size(), (uint32_t*)(frag.data()), "main", &m_shader);
                              vert.size(), (uint32_t*)(vert.data()), "VSMain", 
                              frag.size(), (uint32_t*)(frag.data()), "PSMain", &m_texture_shader);
 #elif defined(TINY_RENDERER_DX)
@@ -212,7 +212,7 @@ void init_tiny_renderer(GLFWwindow* window)
     descriptors[0].shader_stages = tr_shader_stage_comp;
     descriptors[1].type          = tr_descriptor_type_storage_buffer;
     descriptors[1].count         = 1;
-    descriptors[1].binding       = 1;
+    descriptors[1].binding       = 2;
     descriptors[1].shader_stages = tr_shader_stage_comp;
     tr_create_descriptor_set(m_renderer, descriptors.size(), descriptors.data(), &m_compute_desc_set);
 
@@ -264,20 +264,18 @@ void init_tiny_renderer(GLFWwindow* window)
     uint64_t buffer_size = m_image_row_stride * m_image_height;
     uint64_t element_count = m_image_width * m_image_height;
     uint64_t struct_stride = 4;
-    uint64_t counter_offset = tr_util_calc_storage_counter_offset(buffer_size);
-    buffer_size = counter_offset + sizeof(uint32_t);
-    tr_create_storage_buffer(m_renderer, buffer_size, 0, element_count, struct_stride, counter_offset, tr_buffer_feature_none, &m_compute_src_buffer);
-    tr_util_update_buffer(m_renderer->graphics_queue, buffer_size - sizeof(uint32_t), image_data, m_compute_src_buffer);
-    tr_util_set_storage_buffer_count(m_renderer->graphics_queue, counter_offset, element_count, m_compute_src_buffer);
+    tr_create_storage_buffer(m_renderer, buffer_size, 0, element_count, struct_stride, tr_buffer_feature_none, &m_compute_src_buffer);
+    //tr_util_update_buffer(m_renderer->graphics_queue, buffer_size - sizeof(uint32_t), image_data, m_compute_src_buffer);
+    //tr_util_update_buffer(m_renderer->graphics_queue, buffer_size, image_data, m_compute_src_buffer);
+    //tr_util_set_storage_buffer_count(m_renderer->graphics_queue, 0, element_count, m_compute_src_buffer);
+    tr_util_set_storage_buffer_count(m_renderer->graphics_queue, 0, 0, m_compute_src_buffer);
     lc_free_image(image_data);
 
     buffer_size = m_image_row_stride * m_image_height;
     element_count = m_image_width * m_image_height;
     struct_stride = 4;
-    counter_offset = tr_util_calc_storage_counter_offset(buffer_size);
-    buffer_size = counter_offset + sizeof(uint32_t);
-    tr_create_storage_buffer(m_renderer, buffer_size, 0, element_count, struct_stride, counter_offset, tr_buffer_feature_none, &m_compute_dst_buffer);
-    tr_util_set_storage_buffer_count(m_renderer->graphics_queue, counter_offset, 0, m_compute_dst_buffer);
+    tr_create_storage_buffer(m_renderer, buffer_size, 0, element_count, struct_stride, tr_buffer_feature_none, &m_compute_dst_buffer);
+    tr_util_set_storage_buffer_count(m_renderer->graphics_queue, 0, 0, m_compute_dst_buffer);
  
     tr_create_texture_2d(m_renderer, m_image_width, m_image_height, tr_sample_count_1, tr_format_r8g8b8a8_unorm, 1, NULL, false, tr_texture_usage_sampled_image, &m_texture);
     tr_util_transition_image(m_renderer->graphics_queue, m_texture, tr_texture_usage_undefined, tr_texture_usage_sampled_image);
@@ -323,7 +321,8 @@ void draw_frame()
     tr_cmd_buffer_transition(cmd, m_compute_dst_buffer, tr_buffer_usage_storage, tr_buffer_usage_transfer_src);
     // Copy compute output buffer to texture
     tr_cmd_image_transition(cmd, m_texture, tr_texture_usage_sampled_image, tr_texture_usage_transfer_dst);
-    tr_cmd_copy_buffer_to_texture2d(cmd, m_image_width, m_image_height, m_image_row_stride, 0, 0, m_compute_dst_buffer, m_texture);
+    tr_cmd_copy_buffer_to_texture2d(cmd, m_image_width, m_image_height, m_image_row_stride, 0, 0, m_compute_src_buffer, m_texture);
+    //tr_cmd_copy_buffer_to_texture2d(cmd, m_image_width, m_image_height, m_image_row_stride, 0, 0, m_compute_dst_buffer, m_texture);
     tr_cmd_image_transition(cmd, m_texture, tr_texture_usage_transfer_dst, tr_texture_usage_sampled_image);
     // Draw compute result to screen - pixels will be out of order because of append/consume
     tr_cmd_render_target_transition(cmd, render_target, tr_texture_usage_present, tr_texture_usage_color_attachment); 

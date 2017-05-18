@@ -1,14 +1,26 @@
+AppendStructuredBuffer<uint>  BufferIn : register(u0);
+AppendStructuredBuffer<uint>  BufferOut : register(u2);
 
+[numthreads(16, 1, 1)]
+void main(uint3 tid : SV_DispatchThreadID)
+{
+  //uint val = BufferIn.Consume();
+  //val |= 0xFF00007F;
+  //BufferOut.Append(val);
+  uint val = 0xFF0000FF;
+  BufferIn.Append(val);
+
+  val = 0xFF00FF00;
+  BufferOut.Append(val);
+}
+
+/*
 struct Data {
   uint  rgba;
 };
 
-// 
-// Vulkan version requires 'buffer' for source
-// buffer - so just match it.
-// 
 ConsumeStructuredBuffer<Data>  BufferIn : register(u0);
-AppendStructuredBuffer<Data>  BufferOut : register(u1);
+AppendStructuredBuffer<Data>  BufferOut : register(u2);
 
 [numthreads(16, 1, 1)]
 void main(uint3 tid : SV_DispatchThreadID)
@@ -20,3 +32,4 @@ void main(uint3 tid : SV_DispatchThreadID)
              ((val.rgba & 0x00FF0000) >> 16);
   BufferOut.Append(val);
 }
+*/

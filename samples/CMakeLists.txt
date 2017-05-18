@@ -27,7 +27,7 @@ add_vk(02_Texture)
 add_vk(03_UniformBuffer)
 add_vk(04_SimpleCompute)
 add_vk(05_StructuredBuffer)
-#add_vk(06_AppendConsume)
+add_vk(06_AppendConsume)
 add_vk(07_ByteAddressBuffer)
 add_vk(08_ConstantBuffer)
 
