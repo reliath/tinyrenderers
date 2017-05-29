@@ -17,6 +17,8 @@
     #include "tinydx.h"
 #elif defined(TINY_RENDERER_VK)
     #include "tinyvk.h"
+    #define SPIRV_VARS_IMPLEMENTATION
+    #include "spirv_vars.hpp"
 #endif
 
 #define LC_IMAGE_IMPLEMENTATION
@@ -171,6 +173,9 @@ void init_tiny_renderer(GLFWwindow* window)
     tr_create_shader_program(m_renderer, 
                              vert.size(), (uint32_t*)(vert.data()), "VSMain", 
                              frag.size(), (uint32_t*)(frag.data()), "PSMain", &m_shader);
+
+    spirv_vars::Parser parser(kAssetDir + "test/test.cs.spv");
+    assert(parser.IsValid());
 #elif defined(TINY_RENDERER_DX)
     auto hlsl = load_file(kAssetDir + "uniformbuffer.hlsl");
     tr_create_shader_program(m_renderer, 
