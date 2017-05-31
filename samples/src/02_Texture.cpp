@@ -164,10 +164,10 @@ void init_tiny_renderer(GLFWwindow* window)
     
 #if defined(TINY_RENDERER_VK)
     // Uses HLSL source
-    auto vert = load_file(kAssetDir + "texture.vs.spv");
+    auto vert = load_file(kAssetDir + "working.spv");
     auto frag = load_file(kAssetDir + "texture.ps.spv");
     tr_create_shader_program(m_renderer, 
-                             vert.size(), (uint32_t*)(vert.data()), "VSMain", 
+                             vert.size(), (uint32_t*)(vert.data()), "main", 
                              frag.size(), (uint32_t*)(frag.data()), "PSMain", &m_shader);
 #elif defined(TINY_RENDERER_DX)
     auto hlsl = load_file(kAssetDir + "texture.hlsl");
@@ -176,7 +176,7 @@ void init_tiny_renderer(GLFWwindow* window)
                              hlsl.size(), hlsl.data(), "PSMain", &m_shader);
 #endif
 
-    std::vector<tr_descriptor> descriptors(2);
+    std::vector<tr_descriptor> descriptors(3);
     descriptors[0].type          = tr_descriptor_type_texture_srv;
     descriptors[0].count         = 1;
     descriptors[0].binding       = 0;
@@ -185,6 +185,10 @@ void init_tiny_renderer(GLFWwindow* window)
     descriptors[1].count         = 1;
     descriptors[1].binding       = 1;
     descriptors[1].shader_stages = tr_shader_stage_frag;
+    descriptors[2].type          = tr_descriptor_type_uniform_buffer_cbv;
+    descriptors[2].count         = 1;
+    descriptors[2].binding       = 2;
+    descriptors[2].shader_stages = tr_shader_stage_vert;
     tr_create_descriptor_set(m_renderer, descriptors.size(), descriptors.data(), &m_desc_set);
 
     tr_vertex_layout vertex_layout = {};
