@@ -17,3 +17,6 @@ add_subdirectory(third_party/glfw)
 
 set(tinyrenders_include_dir "${CMAKE_SOURCE_DIR}")
 add_subdirectory(samples)
+
+set(tinyrenders_include_dir "${CMAKE_SOURCE_DIR}")
+add_subdirectory(hlsl-iovars)
