@@ -14,4 +14,3 @@ float4 main(PSInput input,
                float4(0.50 * tangent, 0.0);
   return ret;
 }
-

@@ -10,4 +10,3 @@ float4 main(float4 sysPos   : SV_POSITION,
                float4(0.50 * tangent, 0.0);
   return ret;
 }
-
